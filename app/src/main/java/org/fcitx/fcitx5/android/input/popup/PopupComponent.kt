@@ -66,29 +66,21 @@ class PopupComponent :
     private val rootBounds: Rect = Rect()
 
     companion object {
-        private var lastModified = 0L
-        private var cachedPopupPreset: Map<String, Array<String>>? = null
-        val popupPresetJson: Map<String, Array<String>>?
-            @Synchronized
-            get() {
-                var file = File(appContext.getExternalFilesDir(null), "config/PopupPreset.json")
-                if (!file.exists()) {
-                    cachedPopupPreset = null
-                    return null
+        val popupPresetJson: Map<String, Array<String>>? by lazy {
+            val file = File(appContext.getExternalFilesDir(null), "config/PopupPreset.json")
+            if (!file.exists()) {
+                null
+            } else {
+                try {
+                    val json = file.readText()
+                    Json.decodeFromString<Map<String, List<String>>>(json)
+                        .mapValues { it.value.toTypedArray() }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    null
                 }
-                if (cachedPopupPreset == null || file.lastModified() != lastModified) {
-                    try {
-                        lastModified = file.lastModified()
-                        val json = file.readText()
-                        cachedPopupPreset = Json.decodeFromString<Map<String, List<String>>>(json)
-                            .mapValues { it.value.toTypedArray() }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        cachedPopupPreset = null
-                    }
-                }
-                return cachedPopupPreset
             }
+        }
     }
 
     val root by lazy {

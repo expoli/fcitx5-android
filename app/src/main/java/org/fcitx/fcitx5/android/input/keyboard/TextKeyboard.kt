@@ -9,6 +9,10 @@ import android.content.Context
 import android.view.View
 import androidx.annotation.Keep
 import androidx.core.view.allViews
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.core.InputMethodEntry
 import org.fcitx.fcitx5.android.core.KeyState
@@ -22,6 +26,7 @@ import java.io.File
 import kotlinx.serialization.json.*
 import org.fcitx.fcitx5.android.utils.appContext
 import kotlinx.serialization.Serializable
+import android.util.Log
 
 object DisplayTextResolver {
     fun resolve(
@@ -51,14 +56,24 @@ object DisplayTextResolver {
 class TextKeyboard(
     context: Context,
     theme: Theme
-) : BaseKeyboard(context, theme, ::Layout) {
+) : BaseKeyboard(context, theme, TextKeyboard::Layout) { // Changed to reference companion Layout
 
     enum class CapsState { None, Once, Lock }
 
     companion object {
         const val Name = "Text"
-        private var lastModified = 0L
-        var ime: InputMethodEntry? = null
+        private val KEYBOARD_LAYOUT_DIR_NAME = "config"
+        private val KEYBOARD_LAYOUT_FILE_NAME = "TextKeyboardLayout.json"
+        private val TAG = "TextKeyboard"
+
+        // Coroutine scope for background tasks
+        private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        private var lastModifiedTimestamp = 0L // Renamed for clarity
+
+        private val _textLayoutJsonMapFlow = MutableStateFlow<Map<String, List<List<KeyJson>>>?>(null)
+        val textLayoutJsonMapFlow = _textLayoutJsonMapFlow.asStateFlow()
+        
+        var ime: InputMethodEntry? = null // Retained from original, usage needs review for async model
 
         @Serializable
         data class KeyJson(
@@ -70,34 +85,57 @@ class TextKeyboard(
             val subLabel: String? = null,
             val weight: Float? = null
         )
-        var cachedLayoutJsonMap: Map<String, List<List<KeyJson>>>? = null
 
-        val textLayoutJsonMap: Map<String, List<List<KeyJson>>>?
-            @Synchronized
-            get() {
-                val file = File(appContext.getExternalFilesDir(null), "config/TextKeyboardLayout.json")
-                if (!file.exists()) {
-                    cachedLayoutJsonMap = null
-                    return null
+        fun loadLayoutsIfNeededAsync() {
+            scope.launch {
+                val externalFilesDir = appContext.getExternalFilesDir(null)
+                if (externalFilesDir == null) {
+                    Log.e(TAG, "External files directory is null. Cannot load layouts.")
+                    _textLayoutJsonMapFlow.value = emptyMap() // Indicate an issue or clear existing
+                    return@launch
                 }
-                if (cachedLayoutJsonMap == null || file.lastModified() != lastModified) {
-                    try {
-                        lastModified = file.lastModified()
-                        val json = file.readText()
-                        cachedLayoutJsonMap = Json.decodeFromString<Map<String, List<List<KeyJson>>>>(json)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        cachedLayoutJsonMap = null
+                val layoutDir = File(externalFilesDir, KEYBOARD_LAYOUT_DIR_NAME)
+                val jsonFile = File(layoutDir, KEYBOARD_LAYOUT_FILE_NAME)
+
+                if (!jsonFile.exists()) {
+                    Log.w(TAG, "$KEYBOARD_LAYOUT_FILE_NAME not found in $layoutDir.")
+                    if (_textLayoutJsonMapFlow.value != null || lastModifiedTimestamp != 0L) {
+                        _textLayoutJsonMapFlow.value = emptyMap() // Clear if it was previously loaded
+                        lastModifiedTimestamp = 0L
                     }
+                    return@launch
                 }
-                return cachedLayoutJsonMap
-            }
 
-        private fun getTextLayoutJsonForIme(displayName: String): List<List<KeyJson>>? {
-            val map = textLayoutJsonMap ?: return null
-            return map[displayName] ?: null
+                val currentJsonTimestamp = jsonFile.lastModified()
+                if (_textLayoutJsonMapFlow.value == null || lastModifiedTimestamp != currentJsonTimestamp) {
+                    val newMap = runCatching {
+                        val jsonText = jsonFile.readText()
+                        // Ensure Json instance is configured for your needs, e.g., ignoreUnknownKeys
+                        val jsonParser = Json { ignoreUnknownKeys = true; isLenient = true }
+                        jsonParser.decodeFromString<Map<String, List<List<KeyJson>>>>(jsonText)
+                    }.getOrElse { e ->
+                        Log.e(TAG, "Error loading or parsing $KEYBOARD_LAYOUT_FILE_NAME", e)
+                        emptyMap<String, List<List<KeyJson>>>() // Fallback to empty map on error
+                    }
+                    _textLayoutJsonMapFlow.value = newMap
+                    lastModifiedTimestamp = currentJsonTimestamp
+                }
+            }
+        }
+        
+        // Provides synchronous access to the current map, primarily for getTextLayoutJsonForIme.
+        // UI elements should prefer observing the flow.
+        private val currentTextLayoutJsonMap: Map<String, List<List<KeyJson>>>?
+            get() = _textLayoutJsonMapFlow.value
+        
+        // This function might be called before the flow has emitted if used very early.
+        // Consider making it suspend or handle nullability more explicitly if called from UI layer directly.
+        fun getTextLayoutJsonForIme(displayName: String): List<List<KeyJson>>? {
+            val map = currentTextLayoutJsonMap ?: return null // Return null if map not loaded yet
+            return map[displayName]
         }
 
+        // Default static layout (remains unchanged)
         val Layout: List<List<KeyDef>> = listOf(
             listOf(
                 AlphabetKey("Q", "1"),
@@ -160,14 +198,25 @@ class TextKeyboard(
 
     private val keepLettersUppercase by AppPrefs.getInstance().keyboard.keepLettersUppercase
 
-    init {
-    }
-
     private val textKeys: List<TextKeyView> by lazy {
         allViews.filterIsInstance(TextKeyView::class.java).toList()
     }
 
     private var capsState: CapsState = CapsState.None
+    private var punctuationMapping: Map<String, String> = mapOf()
+    
+    // Coroutine Job for this instance to cancel collection on detach
+    private var viewCollectJob: Job? = null
+    private val keyboardScope = CoroutineScope(Dispatchers.Main)
+
+
+    init {
+        // Trigger initial load
+        loadLayoutsIfNeededAsync()
+        
+        // Observe layout changes - This might be better in onAttach if ime is not ready here
+        // However, onInputMethodUpdate will also trigger updateAlphabetKeys
+    }
 
     private fun transformAlphabet(c: String): String {
         return when (capsState) {
@@ -176,7 +225,6 @@ class TextKeyboard(
         }
     }
 
-    private var punctuationMapping: Map<String, String> = mapOf()
     private fun transformPunctuation(p: String) = punctuationMapping.getOrDefault(p, p)
 
     override fun onAction(action: KeyAction, source: KeyActionListener.Source) {
@@ -216,15 +264,36 @@ class TextKeyboard(
     }
 
     override fun onAttach() {
+        super.onAttach() // Call super if BaseKeyboard has onAttach
         capsState = CapsState.None
         updateCapsButtonIcon()
+        // Initial update using currently available data (might be null/empty if not loaded)
         updateAlphabetKeys()
+        
+        // Start collecting layout updates
+        viewCollectJob?.cancel() // Cancel previous job if any
+        viewCollectJob = keyboardScope.launch {
+            textLayoutJsonMapFlow.collectLatest { layoutMap ->
+                // This collection will trigger whenever the global layoutMapFlow updates
+                // We then call updateAlphabetKeys which uses the current IME's specific layout
+                Log.d(TAG, "Layout data updated via flow. Refreshing alphabet keys.")
+                updateAlphabetKeys()
+            }
+        }
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         updateLangSwitchKey(showLangSwitchKey.getValue())
         showLangSwitchKey.registerOnChangeListener(showLangSwitchKeyListener)
+        // Ensure layouts are loaded if this keyboard becomes visible again
+        loadLayoutsIfNeededAsync()
+    }
+    
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        showLangSwitchKey.unregisterOnChangeListener(showLangSwitchKeyListener)
+        viewCollectJob?.cancel() // Stop collecting when view is detached
     }
 
     override fun onReturnDrawableUpdate(returnDrawable: Int) {
@@ -236,16 +305,18 @@ class TextKeyboard(
         updatePunctuationKeys()
     }
 
-    override fun onInputMethodUpdate(ime: InputMethodEntry) {
-        // update ime of companion object ime
-        TextKeyboard.ime = ime
-        updateAlphabetKeys()
+    override fun onInputMethodUpdate(imeUpdate: InputMethodEntry) {
+        // Update companion object's ime. This static reference might need careful handling
+        // if multiple TextKeyboard instances could exist with different IMEs.
+        TextKeyboard.ime = imeUpdate 
+        Log.d(TAG, "Input method updated to: ${imeUpdate.uniqueName}. Refreshing alphabet keys.")
+        updateAlphabetKeys() // This will now use the async-loaded layout
         space.mainText.text = buildString {
-            append(ime.displayName)
-            ime.subMode.run { label.ifEmpty { name.ifEmpty { null } } }?.let { append(" ($it)") }
+            append(imeUpdate.displayName)
+            imeUpdate.subMode.run { label.ifEmpty { name.ifEmpty { null } } }?.let { append(" ($it)") }
         }
         if (capsState != CapsState.None) {
-            switchCapsState()
+            switchCapsState() // Reset caps state on IME change
         }
     }
 
@@ -302,39 +373,56 @@ class TextKeyboard(
     }
 
     private fun updateAlphabetKeys() {
-        val layoutJson = getTextLayoutJsonForIme(ime?.uniqueName ?: "default")
+        // Use TextKeyboard.ime as it's updated by onInputMethodUpdate
+        val currentIme = TextKeyboard.ime 
+        if (currentIme == null) {
+            Log.w(TAG, "Cannot update alphabet keys, IME is null.")
+            // Optionally, clear keys or set to a default state
+            // textKeys.forEach { it.mainText.text = "" }
+            return
+        }
+        
+        // getTextLayoutJsonForIme now gets data from the flow's current value (potentially null)
+        val layoutJson = getTextLayoutJsonForIme(currentIme.uniqueName)
+
         if (layoutJson != null) {
-            textKeys.forEach {
-                if (it.def !is KeyDef.Appearance.AltText) return@forEach
-                val keyJson = layoutJson.flatten().find { key -> key.main == it.def.character }
+            Log.d(TAG, "Applying custom layout for ${currentIme.uniqueName}")
+            textKeys.forEach { keyView ->
+                if (keyView.def !is KeyDef.Appearance.AltText) return@forEach // Assuming def is set
+                val keyJson = layoutJson.flatten().find { key -> key.main == keyView.def.character }
                 val displayText = if (keyJson != null ) {
                   DisplayTextResolver.resolve(
                     keyJson.displayText,
-                    ime?.subMode?.label ?: "",
-                    keyJson.main ?: ""
+                    currentIme.subMode?.label ?: "",
+                    keyJson.main ?: "" // Fallback to main if displayText logic returns nothing useful
                   )
                 } else {
-                  it.def.character
+                  keyView.def.character // Fallback to original def character
                 }
-                // val displayText = keyJson?.displayText ?: keyJson?.main ?: it.def.character
 
-                it.mainText.text = displayText?.let { str ->
-                    if (keepLettersUppercase) {
+                keyView.mainText.text = displayText.let { str ->
+                    if (str.isEmpty()) keyView.def.character // further fallback if display text ends up empty
+                    else if (keepLettersUppercase) {
                       keyJson?.main?.uppercase() ?: str.uppercase()
                     } else {
                       when(capsState) {
-                        CapsState.None -> displayText.lowercase() ?: keyJson?.main?.lowercase() ?: str.lowercase()
-                        else -> keyJson?.main?.uppercase() ?: str.uppercase()
+                        CapsState.None -> str.lowercase()
+                        else -> str.uppercase()
                       }
                     }
-                } ?: it.def.character
+                }
             }
         } else {
-            textKeys.forEach {
-                if (it.def !is KeyDef.Appearance.AltText) return
-                it.mainText.text = it.def.displayText.let { str ->
-                    if (str.length != 1 || !str[0].isLetter()) return@forEach
-                    if (keepLettersUppercase) str.uppercase() else transformAlphabet(str)
+            // Fallback to default behavior if no custom layout is found or loaded
+            Log.d(TAG, "No custom layout for ${currentIme.uniqueName}, using default key definitions.")
+            textKeys.forEach { keyView ->
+                if (keyView.def !is KeyDef.Appearance.AltText) return@forEach
+                 // Ensure def.displayText is not null, provide fallback
+                val originalDisplayText = keyView.def.displayText ?: keyView.def.character ?: ""
+                if (originalDisplayText.length == 1 && originalDisplayText[0].isLetter()) {
+                     keyView.mainText.text = if (keepLettersUppercase) originalDisplayText.uppercase() else transformAlphabet(originalDisplayText)
+                } else {
+                    keyView.mainText.text = originalDisplayText // Use as is if not a single letter
                 }
             }
         }
@@ -346,13 +434,12 @@ class TextKeyboard(
                 it.def as KeyDef.Appearance.AltText
                 it.altText.text = transformPunctuation(it.def.altText)
             } else {
-                it.def as KeyDef.Appearance.Text
-                it.mainText.text = it.def.displayText.let { str ->
-                    if (str[0].run { isLetter() || isWhitespace() }) return@forEach
-                    transformPunctuation(str)
+                // Ensure def and displayText are appropriately handled if they could be null
+                (it.def as? KeyDef.Appearance.Text)?.displayText?.let { str ->
+                    if (str.isNotEmpty() && str[0].run { isLetter() || isWhitespace() }) return@forEach
+                    it.mainText.text = transformPunctuation(str)
                 }
             }
         }
     }
-
 }
