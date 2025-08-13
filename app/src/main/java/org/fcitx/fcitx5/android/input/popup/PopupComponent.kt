@@ -160,6 +160,7 @@ class PopupComponent :
             popupKeyHeight,
             // position popup keyboard higher, because of [^1]
             popupHeight + keyBottomMargin,
+            this.service,
             keys,
             labels
         )

@@ -7,9 +7,13 @@ package org.fcitx.fcitx5.android.input.popup
 import android.content.Context
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
+import android.view.KeyEvent // Added import
 import android.view.ViewOutlineProvider
+import org.fcitx.fcitx5.android.core.KeyState
+import org.fcitx.fcitx5.android.core.KeyStates
 import org.fcitx.fcitx5.android.data.theme.Theme
 import org.fcitx.fcitx5.android.input.AutoScaleTextView
+import org.fcitx.fcitx5.android.input.FcitxInputMethodService // Added import
 import org.fcitx.fcitx5.android.input.keyboard.KeyAction
 import splitties.dimensions.dp
 import splitties.views.dsl.core.Ui
@@ -39,6 +43,7 @@ import kotlin.math.roundToInt
  * @param keyHeight key height in popup keyboard
  * @param popupHeight popup preview view height. Used to transform gesture coordinate from
  * trigger view to popup keyboard view. See [offsetX] and [offsetY].
+ * @param service The FcitxInputMethodService instance
  * @param keys character to commit when triggered
  * @param labels symbols to show on keys
  */
@@ -52,6 +57,7 @@ class PopupKeyboardUi(
     private val keyWidth: Int,
     private val keyHeight: Int,
     private val popupHeight: Int,
+    private val service: FcitxInputMethodService, // Added service parameter
     private val keys: Array<String>,
     private val labels: Array<String>
 ) : PopupContainerUi(ctx, theme, outerBounds, triggerBounds, onDismissSelf) {
@@ -219,8 +225,50 @@ class PopupKeyboardUi(
     }
 
     override fun onTrigger(): KeyAction? {
-        val key = keys.getOrNull(focusedIndex) ?: return null
-        return KeyAction.FcitxKeyAction(key)
-    }
+        val rawKeyString = keys.getOrNull(focusedIndex) ?: return null
 
+        if (rawKeyString.startsWith("Ctrl+") && rawKeyString.length > 5) {
+            val actualCharStr = rawKeyString.substring(5)
+            if (actualCharStr.isNotEmpty()) {
+                val charToPress = actualCharStr[0]
+                var keyCode = 0
+                val upperChar = charToPress.uppercaseChar()
+
+                // Simplified conversion: A-Z, 0-9
+                if (upperChar in 'A'..'Z') {
+                    keyCode = KeyEvent.KEYCODE_A + (upperChar.code - 'A'.code)
+                } else if (charToPress in '0'..'9') {
+                    keyCode = KeyEvent.KEYCODE_0 + (charToPress.code - '0'.code)
+                } else {
+                    // For other characters, this mapping is incomplete.
+                    // You might want to add specific mappings for common symbols:
+                    // when (charToPress) {
+                    //     '.' -> keyCode = KeyEvent.KEYCODE_PERIOD
+                    //     ',' -> keyCode = KeyEvent.KEYCODE_COMMA
+                    //     // ... etc.
+                    // }
+                    // android.util.Log.w("PopupKeyboardUi", "Cannot map char '$charToPress' to KeyEvent.KEYCODE for Ctrl operation.")
+                }
+
+                if (keyCode != 0) {
+                    service.sendCombinationKeyEvents(keyCode, ctrl = true)
+                    return null // Action handled directly by service, no further KeyAction needed
+                } else {
+                    // Fallback: If keyCode couldn't be determined for sendCombinationKeyEvents,
+                    // send the original FcitxKeyAction with Ctrl state.
+                    // This ensures some Ctrl functionality remains if mapping fails.
+                    return KeyAction.FcitxKeyAction(
+                        act = actualCharStr,
+                        states = KeyStates(KeyState.Ctrl, KeyState.Virtual)
+                    )
+                }
+            } else {
+                // "Ctrl+" but no character after it - unlikely, but handle defensively by sending as is.
+                return KeyAction.FcitxKeyAction(rawKeyString)
+            }
+        } else {
+            // Not a "Ctrl+" key, send as a normal character.
+            return KeyAction.FcitxKeyAction(rawKeyString)
+        }
+    }
 }
