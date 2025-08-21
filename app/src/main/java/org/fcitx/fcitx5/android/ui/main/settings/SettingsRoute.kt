@@ -28,6 +28,7 @@ import org.fcitx.fcitx5.android.ui.main.settings.addon.AddonListFragment
 import org.fcitx.fcitx5.android.ui.main.settings.behavior.AdvancedSettingsFragment
 import org.fcitx.fcitx5.android.ui.main.settings.behavior.CandidatesSettingsFragment
 import org.fcitx.fcitx5.android.ui.main.settings.behavior.ClipboardSettingsFragment
+import org.fcitx.fcitx5.android.ui.main.settings.behavior.FontsSettingsFragment
 import org.fcitx.fcitx5.android.ui.main.settings.behavior.KeyboardSettingsFragment
 import org.fcitx.fcitx5.android.ui.main.settings.behavior.SymbolSettingsFragment
 import org.fcitx.fcitx5.android.ui.main.settings.global.GlobalConfigFragment
@@ -79,6 +80,9 @@ sealed class SettingsRoute : Parcelable {
 
     @Serializable
     data object Symbol : SettingsRoute()
+
+    @Serializable
+    data object Fonts : SettingsRoute()
 
     @Serializable
     data object Plugin : SettingsRoute()
@@ -218,6 +222,9 @@ sealed class SettingsRoute : Parcelable {
             }
             fragment<SymbolSettingsFragment, Symbol> {
                 label = ctx.getString(R.string.emoji_and_symbols)
+            }
+            fragment<FontsSettingsFragment, Fonts> {
+                label = ctx.getString(R.string.fonts)
             }
             fragment<PluginFragment, Plugin> {
                 label = ctx.getString(R.string.plugins)

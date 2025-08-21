@@ -359,6 +359,35 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
         )
     }
 
+    inner class Fonts : ManagedPreferenceCategory(R.string.fonts, sharedPreferences) {
+        val candFont: ManagedPreference.PString
+        val preeditFont: ManagedPreference.PString
+        val popupKeyFont: ManagedPreference.PString
+        val keyMainFont: ManagedPreference.PString
+        val keyAltFont: ManagedPreference.PString
+        val defaultFont: ManagedPreference.PString
+
+        init {
+            candFont = ManagedPreference.PString(sharedPreferences, "cand_font", "").apply { register() }
+            preeditFont = ManagedPreference.PString(sharedPreferences, "preedit_font", "").apply { register() }
+            popupKeyFont = ManagedPreference.PString(sharedPreferences, "popup_key_font", "").apply { register() }
+            keyMainFont = ManagedPreference.PString(sharedPreferences, "key_main_font", "").apply { register() }
+            keyAltFont = ManagedPreference.PString(sharedPreferences, "key_alt_font", "").apply { register() }
+            defaultFont = ManagedPreference.PString(sharedPreferences, "font", "").apply { register() }
+
+            val onChange = ManagedPreference.OnChangeListener<String> { _, _ ->
+                org.fcitx.fcitx5.android.data.fonts.FontManager.updateFontConfiguration()
+            }
+
+            candFont.registerOnChangeListener(onChange)
+            preeditFont.registerOnChangeListener(onChange)
+            popupKeyFont.registerOnChangeListener(onChange)
+            keyMainFont.registerOnChangeListener(onChange)
+            keyAltFont.registerOnChangeListener(onChange)
+            defaultFont.registerOnChangeListener(onChange)
+        }
+    }
+
     private val providers = mutableListOf<ManagedPreferenceProvider>()
 
     fun <T : ManagedPreferenceProvider> registerProvider(
@@ -378,6 +407,7 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
     val candidates = Candidates().register()
     val clipboard = Clipboard().register()
     val symbols = Symbols().register()
+    val fonts = Fonts().register()
     val advanced = Advanced().register()
 
     @Keep
