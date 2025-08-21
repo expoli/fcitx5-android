@@ -69,6 +69,8 @@ class FontsSettingsFragment : ManagedPreferenceFragment(AppPrefs.getInstance().f
     ) {
         FontManager.showFontPickerDialog(requireContext(), titleRes) { selectedFont ->
             preference.setValue(selectedFont)
+            // 手动触发字体配置更新
+            FontManager.updateFontConfiguration()
             // 刷新设置界面以显示新的摘要
             preferenceScreen.removeAll()
             onCreatePreferences(null, null)

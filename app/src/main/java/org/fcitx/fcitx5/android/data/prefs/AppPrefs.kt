@@ -6,6 +6,7 @@ package org.fcitx.fcitx5.android.data.prefs
 
 import android.content.SharedPreferences
 import android.os.Build
+import android.util.Log
 import androidx.annotation.Keep
 import androidx.annotation.RequiresApi
 import androidx.core.content.edit
@@ -375,7 +376,8 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
             keyAltFont = ManagedPreference.PString(sharedPreferences, "key_alt_font", "").apply { register() }
             defaultFont = ManagedPreference.PString(sharedPreferences, "font", "").apply { register() }
 
-            val onChange = ManagedPreference.OnChangeListener<String> { _, _ ->
+            val onChange = ManagedPreference.OnChangeListener<String> { key, value ->
+                Log.d("AppPrefs.Fonts", "字体配置更改 - $key: $value")
                 org.fcitx.fcitx5.android.data.fonts.FontManager.updateFontConfiguration()
             }
 

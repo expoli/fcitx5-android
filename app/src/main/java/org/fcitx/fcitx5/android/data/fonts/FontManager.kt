@@ -6,6 +6,7 @@ package org.fcitx.fcitx5.android.data.fonts
 
 import android.app.AlertDialog
 import android.content.Context
+import android.util.Log
 import androidx.annotation.StringRes
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
@@ -16,6 +17,8 @@ import java.io.File
 
 object FontManager {
 
+    private const val TAG = "FontManager"
+    
     private val fontsDir = File(appContext.getExternalFilesDir(null), "fonts")
     private val fontConfigFile = File(fontsDir, "fontset.json")
 
@@ -72,6 +75,8 @@ object FontManager {
      */
     fun updateFontConfiguration() {
         try {
+            Log.d(TAG, "开始更新字体配置")
+            
             val fontPrefs = AppPrefs.getInstance().fonts
             val config = JSONObject().apply {
                 val candFont = fontPrefs.candFont.getValue()
@@ -81,6 +86,14 @@ object FontManager {
                 val keyAltFont = fontPrefs.keyAltFont.getValue()
                 val defaultFont = fontPrefs.defaultFont.getValue()
                 
+                Log.d(TAG, "读取到的字体配置:")
+                Log.d(TAG, "  - candFont: '$candFont'")
+                Log.d(TAG, "  - preeditFont: '$preeditFont'")
+                Log.d(TAG, "  - popupKeyFont: '$popupKeyFont'")
+                Log.d(TAG, "  - keyMainFont: '$keyMainFont'")
+                Log.d(TAG, "  - keyAltFont: '$keyAltFont'")
+                Log.d(TAG, "  - defaultFont: '$defaultFont'")
+                
                 put("cand_font", candFont)
                 put("font", defaultFont)
                 put("preedit_font", preeditFont)
@@ -89,17 +102,32 @@ object FontManager {
                 put("key_alt_font", keyAltFont)
             }
             
+            Log.d(TAG, "目标目录: ${fontsDir.absolutePath}")
+            Log.d(TAG, "目标文件: ${fontConfigFile.absolutePath}")
+            
             if (!fontsDir.exists()) {
-                fontsDir.mkdirs()
+                Log.d(TAG, "创建字体目录")
+                val created = fontsDir.mkdirs()
+                Log.d(TAG, "目录创建结果: $created")
             }
             
+            Log.d(TAG, "目录是否存在: ${fontsDir.exists()}")
+            Log.d(TAG, "目录是否可写: ${fontsDir.canWrite()}")
+            
             fontConfigFile.writeText(config.toString(2))
+            
+            Log.d(TAG, "文件是否存在: ${fontConfigFile.exists()}")
+            Log.d(TAG, "文件大小: ${if (fontConfigFile.exists()) fontConfigFile.length() else "N/A"}")
+            
+            // 添加日志信息
+            Log.i(TAG, "字体配置已更新到文件: ${fontConfigFile.absolutePath}")
+            Log.d(TAG, "配置内容: ${config.toString(2)}")
             
             // 清除字体缓存，触发重新加载
             AutoScaleTextView.clearFontCache()
         } catch (e: Exception) {
             // 记录错误但不崩溃
-            e.printStackTrace()
+            Log.e(TAG, "更新字体配置时出错: ${e.message}", e)
         }
     }
 
