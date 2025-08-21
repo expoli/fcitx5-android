@@ -21,10 +21,45 @@ object FontManager {
     
     private val fontsDir = File(appContext.getExternalFilesDir(null), "fonts")
     private val fontConfigFile = File(fontsDir, "fontset.json")
+    
+    // 字体更改监听器
+    interface OnFontChangeListener {
+        fun onFontConfigurationChanged()
+    }
+    
+    private val fontChangeListeners = mutableListOf<OnFontChangeListener>()
 
     init {
         if (!fontsDir.exists()) {
             fontsDir.mkdirs()
+        }
+    }
+
+    /**
+     * 添加字体更改监听器
+     */
+    fun addOnFontChangeListener(listener: OnFontChangeListener) {
+        fontChangeListeners.add(listener)
+    }
+    
+    /**
+     * 移除字体更改监听器
+     */
+    fun removeOnFontChangeListener(listener: OnFontChangeListener) {
+        fontChangeListeners.remove(listener)
+    }
+    
+    /**
+     * 通知所有监听器字体配置已更改
+     */
+    private fun notifyFontConfigurationChanged() {
+        Log.d(TAG, "通知字体配置更改，监听器数量: ${fontChangeListeners.size}")
+        fontChangeListeners.forEach { listener ->
+            try {
+                listener.onFontConfigurationChanged()
+            } catch (e: Exception) {
+                Log.e(TAG, "字体更改监听器执行失败", e)
+            }
         }
     }
 
@@ -125,6 +160,9 @@ object FontManager {
             
             // 清除字体缓存，触发重新加载
             AutoScaleTextView.clearFontCache()
+            
+            // 通知所有监听器字体配置已更改
+            notifyFontConfigurationChanged()
         } catch (e: Exception) {
             // 记录错误但不崩溃
             Log.e(TAG, "更新字体配置时出错: ${e.message}", e)
