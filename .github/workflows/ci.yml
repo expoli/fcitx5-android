@@ -6,7 +6,7 @@ on:
     branches:
       - '*'
     tags:
-      - '![0-9]+.*'
+      - '*'  # 允许所有标签触发构建
     paths:
       - '**/**'
       - '!*.md'
@@ -126,13 +126,69 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
 
       # create nightly release
-      - name: Create Nightly release
+      - name: Generate unique release tag
+        id: generate_tag
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # 如果是 tag 触发，使用 tag 名称 + 时间戳确保唯一性
+            RELEASE_TAG="${{ github.ref_name }}-$(date +'%Y%m%d-%H%M%S')"
+            RELEASE_TITLE="Release ${{ github.ref_name }} ($(date +'%Y-%m-%d %H:%M:%S'))"
+            IS_PRERELEASE="false"
+          else
+            # 如果是分支触发，创建 nightly 构建
+            RELEASE_TAG="nightly-${{ github.ref_name }}-$(date +'%Y%m%d-%H%M%S')"
+            RELEASE_TITLE="Nightly Build - ${{ github.ref_name }} ($(date +'%Y-%m-%d %H:%M:%S'))"
+            IS_PRERELEASE="true"
+          fi
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "release_title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: generate_notes
+        run: |
+          # 获取最近的 commits 作为 release notes
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # 对于 tag，获取从上一个 tag 到当前 tag 的变更
+            PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            if [[ -n "$PREVIOUS_TAG" ]]; then
+              RELEASE_NOTES=$(git log --pretty=format:"- %s (%h)" $PREVIOUS_TAG..HEAD)
+            else
+              RELEASE_NOTES=$(git log --pretty=format:"- %s (%h)" --max-count=10)
+            fi
+          else
+            # 对于分支，获取最近 10 个 commits
+            RELEASE_NOTES=$(git log --pretty=format:"- %s (%h)" --max-count=10)
+          fi
+          
+          # 添加构建信息
+          BUILD_INFO="
+          
+          ## 构建信息
+          - 构建时间: $(date +'%Y-%m-%d %H:%M:%S UTC')
+          - 分支/标签: ${{ github.ref_name }}
+          - 提交: ${{ github.sha }}
+          - 构建系统: ${{ matrix.os }}
+          - 架构: ${{ matrix.abi }}
+          "
+          
+          FULL_NOTES="## 更改日志
+          $RELEASE_NOTES
+          $BUILD_INFO"
+          
+          # 保存到文件，处理多行内容
+          echo "$FULL_NOTES" > release_notes.md
+          echo "Generated release notes:"
+          cat release_notes.md
+
+      - name: Create Release
         uses: 'marvinpinto/action-automatic-releases@latest'
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          automatic_release_tag: ${{ github.ref_name }}
-          prerelease: true
-          title: "Nightly Build"
+          automatic_release_tag: ${{ steps.generate_tag.outputs.release_tag }}
+          prerelease: ${{ steps.generate_tag.outputs.is_prerelease }}
+          title: ${{ steps.generate_tag.outputs.release_title }}
+          body_path: release_notes.md
           files: |
             app/build/outputs/apk/release/*.apk
 

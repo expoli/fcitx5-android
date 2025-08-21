@@ -1,0 +1,231 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.*'  # 匹配版本标签，如 v1.0.0, v2.1.3-beta 等
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name for release'
+        required: true
+        default: 'v0.0.0'
+      prerelease:
+        description: 'Mark as pre-release'
+        type: boolean
+        default: false
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-22.04
+        abi:
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
+    env:
+      BUILD_ABI: ${{ matrix.abi }}
+    steps:
+      - name: Fetch source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Android environment
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "cmake;3.22.1"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install extra-cmake-modules gettext
+
+      - name: Prepare personal build sources
+        run: |
+          ./prepare_personal_build.sh
+
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v3
+
+      - name: Build Release APK
+        run: |
+          ./gradlew :app:assembleRelease
+          ./gradlew :assembleReleasePlugins
+      
+      - name: Move plugin APKs
+        shell: bash
+        run: |
+          for i in $(ls plugin)
+          do
+            if [ -d "plugin/${i}" ]
+            then
+              mv "plugin/${i}/build/outputs/apk/release"/*.apk "app/build/outputs/apk/release/"
+            fi
+          done
+        
+      - name: Sign all App
+        uses: kevin-david/zipalign-sign-android-release@v1.1.1
+        id: sign_apk
+        with:
+          releaseDirectory: app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
+          alias: ${{ secrets.KEY_ALIAS }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+          zipAlign: true
+        env:
+          BUILD_TOOLS_VERSION: "31.0.0"
+
+      - name: Delete unsigned APKs
+        shell: bash
+        run: |
+          rm app/build/outputs/apk/release/*unsigned.apk
+          pushd app/build/outputs/apk/release
+          for file in *unsigned-*; do
+            new_name="${file/unsigned-/}"
+            mv -- "$file" "$new_name"
+          done
+          popd
+
+      - name: Determine release info
+        id: release_info
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG_NAME="${{ github.event.inputs.tag }}"
+            IS_PRERELEASE="${{ github.event.inputs.prerelease }}"
+          else
+            TAG_NAME="${{ github.ref_name }}"
+            # 判断是否为预发布版本（包含 alpha, beta, rc 等）
+            if [[ "$TAG_NAME" =~ (alpha|beta|rc|pre) ]]; then
+              IS_PRERELEASE="true"
+            else
+              IS_PRERELEASE="false"
+            fi
+          fi
+          
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "release_title=Release $TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Generate comprehensive release notes
+        id: release_notes
+        run: |
+          TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
+          
+          # 获取上一个版本标签
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          # 生成变更日志
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            echo "# 🚀 Release $TAG_NAME" > release_notes.md
+            echo "" >> release_notes.md
+            echo "## 📝 更改内容" >> release_notes.md
+            echo "" >> release_notes.md
+            
+            # 获取提交信息并分类
+            git log --pretty=format:"%s (%h)" $PREVIOUS_TAG..HEAD | while read line; do
+              if [[ "$line" =~ ^(feat|feature) ]]; then
+                echo "### ✨ 新功能" >> release_notes.md
+                echo "- $line" >> release_notes.md
+              elif [[ "$line" =~ ^(fix|bugfix) ]]; then
+                echo "### 🐛 问题修复" >> release_notes.md
+                echo "- $line" >> release_notes.md
+              elif [[ "$line" =~ ^(docs|doc) ]]; then
+                echo "### 📚 文档更新" >> release_notes.md
+                echo "- $line" >> release_notes.md
+              elif [[ "$line" =~ ^(style|ui) ]]; then
+                echo "### 💄 界面改进" >> release_notes.md
+                echo "- $line" >> release_notes.md
+              elif [[ "$line" =~ ^(perf|performance) ]]; then
+                echo "### ⚡ 性能优化" >> release_notes.md
+                echo "- $line" >> release_notes.md
+              else
+                echo "### 🔧 其他更改" >> release_notes.md
+                echo "- $line" >> release_notes.md
+              fi
+            done
+          else
+            echo "# 🚀 Release $TAG_NAME" > release_notes.md
+            echo "" >> release_notes.md
+            echo "## 📝 初始版本" >> release_notes.md
+            echo "" >> release_notes.md
+            echo "这是项目的初始发布版本。" >> release_notes.md
+          fi
+          
+          # 添加构建信息
+          echo "" >> release_notes.md
+          echo "## 🏗️ 构建信息" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "- **构建时间**: $(date +'%Y-%m-%d %H:%M:%S UTC')" >> release_notes.md
+          echo "- **构建版本**: $TAG_NAME" >> release_notes.md
+          echo "- **提交 SHA**: \`${{ github.sha }}\`" >> release_notes.md
+          echo "- **构建架构**: ${{ matrix.abi }}" >> release_notes.md
+          
+          # 添加安装说明
+          echo "" >> release_notes.md
+          echo "## 📱 安装说明" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "1. 下载对应架构的 APK 文件" >> release_notes.md
+          echo "2. 在 Android 设备上启用「未知来源应用安装」" >> release_notes.md
+          echo "3. 安装主应用 APK" >> release_notes.md
+          echo "4. 根据需要安装插件 APK" >> release_notes.md
+          
+          echo "Generated release notes:"
+          cat release_notes.md
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ matrix.abi }}
+          path: app/build/outputs/apk/release/*.apk
+
+      - name: Create Release
+        if: matrix.abi == 'arm64-v8a'  # 只在一个架构上创建 release，避免重复
+        uses: 'marvinpinto/action-automatic-releases@latest'
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          automatic_release_tag: ${{ steps.release_info.outputs.tag_name }}
+          prerelease: ${{ steps.release_info.outputs.is_prerelease }}
+          title: ${{ steps.release_info.outputs.release_title }}
+          body_path: release_notes.md
+          files: |
+            app/build/outputs/apk/release/*.apk
+
+  collect-artifacts:
+    if: always()
+    needs: release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          
+      - name: Collect all APKs
+        run: |
+          mkdir -p collected-apks
+          find artifacts -name "*.apk" -exec cp {} collected-apks/ \;
+          ls -la collected-apks/
+          
+      - name: Update Release with all artifacts
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name || github.event.inputs.tag }}
+          files: collected-apks/*.apk
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
