@@ -311,4 +311,13 @@
     <string name="emoji_skin_tone_type_4">🏽 中等色</string>
     <string name="emoji_skin_tone_type_5">🏾 深色</string>
     <string name="emoji_skin_tone_type_6">🏿 非常深色</string>
+    
+    <!-- Font settings -->
+    <string name="fonts">字体</string>
+    <string name="font_candidate">候选字体</string>
+    <string name="font_preedit">编码字体</string>
+    <string name="font_popup_key">弹出按键字体</string>
+    <string name="font_key_main">按键主字体</string>
+    <string name="font_key_alt">按键次字体</string>
+    <string name="font_default">默认字体</string>
 </resources>

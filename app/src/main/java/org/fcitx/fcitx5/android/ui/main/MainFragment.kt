@@ -86,6 +86,11 @@ class MainFragment : PaddingPreferenceFragment() {
                     SettingsRoute.Symbol
                 )
                 addDestinationPreference(
+                    R.string.fonts,
+                    R.drawable.ic_baseline_text_format_24,
+                    SettingsRoute.Fonts
+                )
+                addDestinationPreference(
                     R.string.plugins,
                     R.drawable.ic_baseline_android_24,
                     SettingsRoute.Plugin

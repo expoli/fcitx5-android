@@ -75,9 +75,14 @@ class AutoScaleTextView @JvmOverloads constructor(
                         .let { json ->
                             json.keys().asSequence().associateTo(mutableMapOf()) { key ->
                                 key to runCatching {
-                                    File(fontsDir, json.getString(key))
-                                    .takeIf { it.exists() }
-                                    ?.let { Typeface.createFromFile(it) }
+                                    val fontFileName = json.getString(key)
+                                    if (fontFileName.isEmpty()) {
+                                        null // 使用系统默认字体
+                                    } else {
+                                        File(fontsDir, fontFileName)
+                                        .takeIf { it.exists() }
+                                        ?.let { Typeface.createFromFile(it) }
+                                    }
                                 }.getOrNull()
                             }
                         } as MutableMap<String, Typeface?> // 确保返回可变Map
@@ -86,6 +91,15 @@ class AutoScaleTextView @JvmOverloads constructor(
                 }
                 return cachedFontTypefaceMap ?: mutableMapOf()
             }
+
+        /**
+         * 清除字体缓存，强制重新加载字体配置
+         */
+        @Synchronized
+        fun clearFontCache() {
+            cachedFontTypefaceMap = null
+            lastModified = 0L
+        }
     }
 
     fun setFontTypeFace(key: String) {
