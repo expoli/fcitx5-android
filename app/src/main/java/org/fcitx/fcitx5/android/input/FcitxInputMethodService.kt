@@ -344,10 +344,30 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                 currentInputConnection.performEditorAction(actionId)
                 return
             }
+            
             when (val action = imeOptions and EditorInfo.IME_MASK_ACTION) {
                 EditorInfo.IME_ACTION_UNSPECIFIED,
-                EditorInfo.IME_ACTION_NONE -> commitText("\n")
-                else -> currentInputConnection.performEditorAction(action)
+                EditorInfo.IME_ACTION_NONE -> {
+                    commitText("\n")
+                }
+                EditorInfo.IME_ACTION_SEND -> {
+                    // 对于发送动作，优先使用 performEditorAction，如果失败则尝试发送原始按键事件
+                    try {
+                        val success = currentInputConnection.performEditorAction(action)
+                        if (!success) {
+                            // performEditorAction 返回 false，尝试发送原始按键事件
+                            sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
+                        }
+                    } catch (e: Exception) {
+                        // 如果出现异常，作为备用方案发送原始按键事件
+                        Timber.w(e, "Failed to perform send action, falling back to key event")
+                        sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
+                    }
+                }
+                else -> {
+                    // 其他所有动作都直接执行
+                    currentInputConnection.performEditorAction(action)
+                }
             }
         }
     }
