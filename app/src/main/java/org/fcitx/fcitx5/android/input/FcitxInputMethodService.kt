@@ -340,6 +340,10 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                 commitText("\n")
                 return
             }
+            if (imeOptions.hasFlag(EditorInfo.IME_ACTION_SEND)) {
+                sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
+                return
+            }
             if (actionLabel?.isNotEmpty() == true && actionId != EditorInfo.IME_ACTION_UNSPECIFIED) {
                 currentInputConnection.performEditorAction(actionId)
                 return
