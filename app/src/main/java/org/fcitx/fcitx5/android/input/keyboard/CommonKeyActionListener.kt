@@ -9,6 +9,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import org.fcitx.fcitx5.android.core.FcitxAPI
+import org.fcitx.fcitx5.android.core.KeySym
 import org.fcitx.fcitx5.android.daemon.launchOnReady
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
 import org.fcitx.fcitx5.android.input.broadcast.PreeditEmptyStateComponent
@@ -61,10 +62,24 @@ class CommonKeyActionListener :
 
     private val spaceKeyLongPressBehavior by kbdPrefs.spaceKeyLongPressBehavior
     private val langSwitchKeyBehavior by kbdPrefs.langSwitchKeyBehavior
+    private val shiftAsWordSeparator by kbdPrefs.shiftAsWordSeparator
 
     private var backspaceSwipeState = Stopped
 
     private val keepComposingIMs = arrayOf("keyboard-us", "unikey")
+
+    /**
+     * 检查当前输入法是否是中文输入法
+     */
+    private suspend fun FcitxAPI.isChineseInputMethod(): Boolean {
+        val currentIme = inputMethodEntryCached.uniqueName
+        return currentIme.contains("pinyin") || 
+               currentIme.contains("shuangpin") || 
+               currentIme.contains("wubi") ||
+               currentIme.contains("cangjie") ||
+               currentIme.contains("zhengma") ||
+               currentIme.contains("rime")
+    }
 
     private suspend fun FcitxAPI.commitAndReset() {
         if (clientPreeditCached.isEmpty() && inputPanelCached.preedit.isEmpty()) {
@@ -91,7 +106,17 @@ class CommonKeyActionListener :
         KeyActionListener { action, _ ->
             when (action) {
                 is FcitxKeyAction -> service.postFcitxJob {
-                    sendKey(action.act, action.states.states, action.code)
+                    // 检查是否需要将 Shift 键转换为分词键
+                    if (shiftAsWordSeparator && 
+                        (action.act == "Shift_L" || action.act == "Shift_R") &&
+                        isChineseInputMethod() &&
+                        horizontalCandidate.adapter.total > 0) {
+                        // 转换为撇号字符 (')，使用 SymAction
+                        val apostropheAction = KeyAction.SymAction(KeySym(0x0027), action.states)
+                        sendKey(apostropheAction.sym, apostropheAction.states)
+                    } else {
+                        sendKey(action.act, action.states.states, action.code)
+                    }
                 }
                 is SymAction -> service.postFcitxJob {
                     sendKey(action.sym, action.states)
