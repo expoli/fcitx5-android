@@ -244,6 +244,11 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                     // KeyEvent from physical keyboard (or input method engine forwardKey)
                     // use cached event if available
                     cachedKeyEvents.remove(it.timestamp)?.let { keyEvent ->
+                        // If you also want cached Enter key presses to go through your custom logic:
+                         if (keyEvent.keyCode == KeyEvent.KEYCODE_ENTER && keyEvent.action == KeyEvent.ACTION_DOWN) {
+                            handleReturnKey()
+                            return@event // Skip sending the raw keyEvent if handled
+                         }
                         currentInputConnection?.sendKeyEvent(keyEvent)
                         return@event
                     }
