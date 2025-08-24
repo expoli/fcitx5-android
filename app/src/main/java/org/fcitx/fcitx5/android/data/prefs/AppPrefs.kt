@@ -174,12 +174,6 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
             LangSwitchBehavior.Enumerate
         ) { showLangSwitchKey.getValue() }
 
-        val shiftAsWordSeparator = switch(
-            R.string.shift_as_word_separator,
-            "shift_as_word_separator",
-            false
-        )
-
         val keyboardHeightPercent: ManagedPreference.PInt
         val keyboardHeightPercentLandscape: ManagedPreference.PInt
 
