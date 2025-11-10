@@ -69,6 +69,7 @@ import org.fcitx.fcitx5.android.utils.InputMethodUtil
 import org.fcitx.fcitx5.android.utils.alpha
 import org.fcitx.fcitx5.android.utils.forceShowSelf
 import org.fcitx.fcitx5.android.utils.inputMethodManager
+import org.fcitx.fcitx5.android.utils.isTypeNull
 import org.fcitx.fcitx5.android.utils.monitorCursorAnchor
 import org.fcitx.fcitx5.android.utils.styledFloat
 import org.fcitx.fcitx5.android.utils.withBatchEdit
@@ -86,6 +87,12 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
 
     private val cachedKeyEvents = LruCache<Int, KeyEvent>(78)
     private var cachedKeyEventIndex = 0
+
+    /**
+     * Saves MetaState produced by hardware keyboard with "sticky" modifier keys, to clear them in order.
+     * See also [InputConnection#clearMetaKeyStates(int)](https://developer.android.com/reference/android/view/inputmethod/InputConnection#clearMetaKeyStates(int))
+     */
+    private var lastMetaState: Int = 0
 
     private lateinit var pkgNameCache: PackageNameCache
 
@@ -244,12 +251,40 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                     // KeyEvent from physical keyboard (or input method engine forwardKey)
                     // use cached event if available
                     cachedKeyEvents.remove(it.timestamp)?.let { keyEvent ->
+                        /**
+                         * intercept the KeyEvent which would cause the default [android.text.method.QwertyKeyListener]
+                         * to show a Gingerbread-style CharacterPickerDialog
+                         */
+                        if (keyEvent.unicodeChar == KeyCharacterMap.PICKER_DIALOG_INPUT.code) {
+                            currentInputConnection?.sendKeyEvent(
+                                KeyEvent(
+                                    keyEvent.downTime, keyEvent.eventTime,
+                                    keyEvent.action, keyEvent.keyCode,
+                                    keyEvent.repeatCount, keyEvent.metaState, -1,
+                                    keyEvent.scanCode, keyEvent.flags, keyEvent.source
+                                )
+                            )
+                            return@event
+                        }
                         // If you also want cached Enter key presses to go through your custom logic:
-                         if (keyEvent.keyCode == KeyEvent.KEYCODE_ENTER && keyEvent.action == KeyEvent.ACTION_DOWN) {
-                            handleReturnKey()
-                            return@event // Skip sending the raw keyEvent if handled
-                         }
+                        if (keyEvent.keyCode == KeyEvent.KEYCODE_ENTER && keyEvent.action == KeyEvent.ACTION_DOWN) {
+                           handleReturnKey()
+                           return@event // Skip sending the raw keyEvent if handled
+                        }
                         currentInputConnection?.sendKeyEvent(keyEvent)
+                        if (KeyEvent.isModifierKey(keyEvent.keyCode)) {
+                            when (keyEvent.action) {
+                                KeyEvent.ACTION_DOWN -> {
+                                    // save current metaState when modifier key down
+                                    lastMetaState = keyEvent.metaState
+                                }
+                                KeyEvent.ACTION_UP -> {
+                                    // only clear metaState that would be missing when this modifier key up
+                                    currentInputConnection?.clearMetaKeyStates(lastMetaState xor keyEvent.metaState)
+                                    lastMetaState = keyEvent.metaState
+                                }
+                            }
+                        }
                         return@event
                     }
                     // simulate key event
@@ -286,6 +321,17 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                     skipNextSubtypeChange = im
                     // [^1]: notify system that input method subtype has changed
                     switchInputMethod(InputMethodUtil.componentName, subtype)
+                }
+            }
+            is FcitxEvent.SwitchInputMethodEvent -> {
+                val (reason) = event.data
+                if (reason != FcitxEvent.SwitchInputMethodEvent.Reason.CapabilityChanged &&
+                    reason != FcitxEvent.SwitchInputMethodEvent.Reason.Other
+                ) {
+                    if (inputDeviceMgr.evaluateOnInputMethodChange()) {
+                        // show inputView for [CandidatesView] when input method switched by user
+                        forceShowSelf()
+                    }
                 }
             }
             else -> {}
@@ -548,27 +594,12 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         // KeyUp and KeyDown events actually can happen on the same time
         val timestamp = cachedKeyEventIndex++
         cachedKeyEvents.put(timestamp, event)
-        val up = event.action == KeyEvent.ACTION_UP
-        val states = KeyStates.fromKeyEvent(event)
-        val charCode = event.unicodeChar
-        // try send charCode first, allow upper case and lower case character generating different KeySym
-        // skip \t, because it's charCode is different from KeySym
-        // skip \n, because fcitx wants \r for return
-        // skip ' ', because it would produce same KeySym regardless of the modifier
-        if (charCode > 0 && charCode != '\t'.code && charCode != '\n'.code && charCode != ' '.code) {
-            // drop modifier state when using combination keys to input number/symbol on some phones
-            // because fcitx doesn't recognize selection key with modifiers (eg. Alt+Q for 1)
-            // in which case event.getNumber().toInt() == event.getUnicodeChar()
-            val s = if (event.number.code == charCode) KeyStates.Empty else states
+        val sym = KeySym.fromKeyEvent(event)
+        if (sym != null) {
+            val states = KeyStates.fromKeyEvent(event)
+            val up = event.action == KeyEvent.ACTION_UP
             postFcitxJob {
-                sendKey(charCode, s.states, event.scanCode, up, timestamp)
-            }
-            return true
-        }
-        val keySym = KeySym.fromKeyEvent(event)
-        if (keySym != null) {
-            postFcitxJob {
-                sendKey(keySym, states, event.scanCode, up, timestamp)
+                sendKey(sym, states, event.scanCode, up, timestamp)
             }
             return true
         }
@@ -668,7 +699,10 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         resetComposingState()
         val flags = CapabilityFlags.fromEditorInfo(attribute)
         capabilityFlags = flags
+        // EditorInfo may change between onStartInput and onStartInputView
+        inputDeviceMgr.notifyOnStartInput(attribute)
         Timber.d("onStartInput: initialSel=${selection.current}, restarting=$restarting")
+        val isNullType = attribute.isTypeNull()
         // wait until InputContext created/activated
         postFcitxJob {
             if (restarting) {
@@ -680,6 +714,10 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
             // EditorInfo can be different in onStartInput and onStartInputView,
             // especially in browsers
             setCapFlags(flags)
+            // for hardware keyboard, focus to allow switching input methods before onStartInputView
+            if (!isNullType) {
+                focus(true)
+            }
         }
     }
 
@@ -827,8 +865,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
             // `fcitx.reset()` here would commit preedit after new cursor position
             // since we have `ClientUnfocusCommit`, focus out and in would do the trick
             postFcitxJob {
-                focus(false)
-                focus(true)
+                focusOutIn()
             }
         }
     }
@@ -976,13 +1013,16 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         }
         resetComposingState()
         postFcitxJob {
-            focus(false)
+            focusOutIn()
         }
         showingDialog?.dismiss()
     }
 
     override fun onFinishInput() {
         Timber.d("onFinishInput")
+        postFcitxJob {
+            focus(false)
+        }
         capabilityFlags = CapabilityFlags.DefaultFlags
     }
 

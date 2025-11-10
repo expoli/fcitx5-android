@@ -1,6 +1,6 @@
 /*
  * SPDX-License-Identifier: LGPL-2.1-or-later
- * SPDX-FileCopyrightText: Copyright 2021-2023 Fcitx5 for Android Contributors
+ * SPDX-FileCopyrightText: Copyright 2021-2025 Fcitx5 for Android Contributors
  */
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
@@ -14,6 +14,7 @@ import org.gradle.api.Project
 import org.gradle.api.file.RegularFile
 import org.gradle.api.internal.provider.AbstractProperty
 import org.gradle.api.internal.provider.Providers
+import org.gradle.api.plugins.BasePluginExtension
 import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.withType
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
@@ -25,6 +26,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
  * - Provide default configuration for `android {...}`
  * - Add desugar JDK libs
  */
+@Suppress("unused")
 class AndroidAppConventionPlugin : AndroidBaseConventionPlugin() {
 
     override fun apply(target: Project) {
@@ -133,7 +135,10 @@ class AndroidAppConventionPlugin : AndroidBaseConventionPlugin() {
                 }
                 // applicationId is not set upon apply
                 it.defaultConfig {
-                    target.setProperty("archivesBaseName", "$applicationId-$versionName")
+                    // https://www.norio.be/blog/archivesBaseName-removed-from-gradle9.html
+                    target.extensions.configure<BasePluginExtension> {
+                        archivesName.set("$applicationId-$versionName")
+                    }
                 }
             }
         }
