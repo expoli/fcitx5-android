@@ -17,6 +17,10 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import org.json.JSONObject
+import java.io.File
+import android.graphics.Typeface
+import org.fcitx.fcitx5.android.utils.appContext
 import kotlin.math.roundToInt
 
 @SuppressLint("AppCompatCustomView")
@@ -53,6 +57,59 @@ class AutoScaleTextView @JvmOverloads constructor(
     private var translateX = 0.0f
     private var textScaleX = 1.0f
     private var textScaleY = 1.0f
+
+    companion object {
+        private var cachedFontTypefaceMap: MutableMap<String, Typeface?>? = null
+        private var lastModified = 0L
+        val fontTypefaceMap: MutableMap<String, Typeface?>
+            @Synchronized
+            get() {
+                val fontsDir = File(appContext.getExternalFilesDir(null), "fonts")
+                val jsonFile = File(fontsDir, "fontset.json")
+                if (!jsonFile.exists()) {
+                    cachedFontTypefaceMap = null
+                    return mutableMapOf() // 返回空Map而非null
+                }
+                if (cachedFontTypefaceMap == null || lastModified != jsonFile.lastModified()) {
+                    cachedFontTypefaceMap = runCatching {
+                        JSONObject(jsonFile.readText().replace(Regex("//.*?\\n"), ""))
+                        .let { json ->
+                            json.keys().asSequence().associateTo(mutableMapOf()) { key ->
+                                key to runCatching {
+                                    val fontFileName = json.getString(key)
+                                    if (fontFileName.isEmpty()) {
+                                        null // 使用系统默认字体
+                                    } else {
+                                        File(fontsDir, fontFileName)
+                                        .takeIf { it.exists() }
+                                        ?.let { Typeface.createFromFile(it) }
+                                    }
+                                }.getOrNull()
+                            }
+                        } as MutableMap<String, Typeface?> // 确保返回可变Map
+                    }.getOrElse { mutableMapOf() }
+                    lastModified = jsonFile.lastModified()
+                }
+                return cachedFontTypefaceMap ?: mutableMapOf()
+            }
+
+        /**
+         * 清除字体缓存，强制重新加载字体配置
+         */
+        @Synchronized
+        fun clearFontCache() {
+            cachedFontTypefaceMap = null
+            lastModified = 0L
+        }
+    }
+
+    fun setFontTypeFace(key: String) {
+        setTypeface(fontTypefaceMap[key] ?: Typeface.DEFAULT)
+    }
+
+    init {
+        setFontTypeFace("font")
+    }
 
     override fun setText(charSequence: CharSequence?, bufferType: BufferType) {
         // setText can be called in super constructor

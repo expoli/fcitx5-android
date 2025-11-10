@@ -17,6 +17,10 @@ import splitties.views.dsl.core.matchParent
 import splitties.views.dsl.core.view
 import splitties.views.dsl.core.wrapContent
 import splitties.views.gravityCenter
+import org.json.JSONObject
+import java.io.File
+import android.graphics.Typeface
+import org.fcitx.fcitx5.android.utils.appContext
 
 class CandidateItemUi(override val ctx: Context, theme: Theme) : Ui {
 
@@ -26,6 +30,10 @@ class CandidateItemUi(override val ctx: Context, theme: Theme) : Ui {
         isSingleLine = true
         gravity = gravityCenter
         setTextColor(theme.candidateTextColor)
+    }
+
+    init {
+      text.setFontTypeFace("cand_font")
     }
 
     override val root = view(::CustomGestureView) {

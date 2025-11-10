@@ -316,4 +316,13 @@
     <string name="emoji_skin_tone_type_6">🏿 Type-6</string>
     <string name="hide_unsupported_emojis">Hide unsupported Emojis</string>
     <string name="key_border_stroke">Enable stroke for key border</string>
+    
+    <!-- Font settings -->
+    <string name="fonts">Fonts</string>
+    <string name="font_candidate">Candidate font</string>
+    <string name="font_preedit">Preedit font</string>
+    <string name="font_popup_key">Popup key font</string>
+    <string name="font_key_main">Key main font</string>
+    <string name="font_key_alt">Key alt font</string>
+    <string name="font_default">Default font</string>
 </resources>

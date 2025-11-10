@@ -57,6 +57,7 @@ import org.fcitx.fcitx5.android.core.SubtypeManager
 import org.fcitx.fcitx5.android.daemon.FcitxConnection
 import org.fcitx.fcitx5.android.daemon.FcitxDaemon
 import org.fcitx.fcitx5.android.data.InputFeedbacks
+import org.fcitx.fcitx5.android.data.fonts.FontManager
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
 import org.fcitx.fcitx5.android.data.prefs.ManagedPreference
 import org.fcitx.fcitx5.android.data.prefs.ManagedPreferenceProvider
@@ -177,6 +178,14 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         replaceInputViews(it)
     }
 
+    @Keep
+    private val fontChangeListener = object : FontManager.OnFontChangeListener {
+        override fun onFontConfigurationChanged() {
+            // 字体配置更改时重新创建输入视图以应用新字体
+            replaceInputView(ThemeManager.activeTheme)
+        }
+    }
+
     /**
      * Post a fcitx operation to [jobs] to be executed
      *
@@ -208,6 +217,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         }
         prefs.candidates.registerOnChangeListener(recreateCandidatesViewListener)
         ThemeManager.addOnChangedListener(onThemeChangeListener)
+        FontManager.addOnFontChangeListener(fontChangeListener)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             postFcitxJob {
                 SubtypeManager.syncWith(enabledIme())
@@ -255,6 +265,11 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
                                 )
                             )
                             return@event
+                        }
+                        // If you also want cached Enter key presses to go through your custom logic:
+                        if (keyEvent.keyCode == KeyEvent.KEYCODE_ENTER && keyEvent.action == KeyEvent.ACTION_DOWN) {
+                           handleReturnKey()
+                           return@event // Skip sending the raw keyEvent if handled
                         }
                         currentInputConnection?.sendKeyEvent(keyEvent)
                         if (KeyEvent.isModifierKey(keyEvent.keyCode)) {
@@ -1029,6 +1044,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         }
         prefs.candidates.unregisterOnChangeListener(recreateCandidatesViewListener)
         ThemeManager.removeOnChangedListener(onThemeChangeListener)
+        FontManager.removeOnFontChangeListener(fontChangeListener)
         super.onDestroy()
         // Fcitx might be used in super.onDestroy()
         FcitxDaemon.disconnect(javaClass.name)

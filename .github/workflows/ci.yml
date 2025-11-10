@@ -1,0 +1,194 @@
+name: Commit CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '*'
+    tags:
+      - '*'  # 允许所有标签触发构建
+    paths:
+      - '**/**'
+      - '!*.md'
+      - '!.gitignore'
+
+jobs:
+  build_commit:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-22.04
+          #- macos-13
+          #- windows-2022
+        abi:
+          #- armeabi-v7a
+          - arm64-v8a
+          #- x86
+          #- x86_64
+    env:
+      BUILD_ABI: ${{ matrix.abi }}
+    steps:
+      - name: Fetch source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      #- name: Regenerate symlinks pointing to submodule (Windows)
+      #  if: ${{ matrix.os == 'windows-2022' }}
+      #  run: |
+      #    Remove-Item -Recurse app/src/main/assets/usr/share
+      #    git checkout -- *
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Android environment
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "cmake;3.22.1"
+
+      - name: Install system dependencies (Ubuntu)
+        if: ${{ matrix.os == 'ubuntu-22.04' }}
+        run: |
+          sudo apt update
+          sudo apt install extra-cmake-modules gettext
+
+      #- name: Install system dependencies (macOS)
+      #  if: ${{ matrix.os == 'macos-13' }}
+      #  run: |
+      #    brew install extra-cmake-modules
+
+      #- name: Install system dependencies (Windows)
+      #  if: ${{ matrix.os == 'windows-2022' }}
+      #  run: |
+      #    C:/msys64/usr/bin/pacman -S --noconfirm mingw-w64-ucrt-x86_64-gettext mingw-w64-ucrt-x86_64-extra-cmake-modules
+      #    Add-Content $env:GITHUB_PATH "C:/msys64/ucrt64/bin"
+
+      - name: Prepare personal build sources
+        run: |
+          ./prepare_personal_build.sh
+
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v3
+
+      - name: Build Release APK
+        run: |
+          ./gradlew :app:assembleRelease
+          ./gradlew :assembleReleasePlugins
+      
+      # move plugin apks to app/build/outputs/apk/release
+      - name: Move plugin APKs
+        shell: bash
+        run: |
+          for i in $(ls plugin)
+          do
+            if [ -d "plugin/${i}" ]
+            then
+              mv "plugin/${i}/build/outputs/apk/release"/*.apk "app/build/outputs/apk/release/"
+            fi
+          done
+        
+      - name: Sign all App
+        uses: kevin-david/zipalign-sign-android-release@v1.1.1
+        id: sign_apk
+        with:
+          releaseDirectory: app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
+          alias: ${{ secrets.KEY_ALIAS }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+          zipAlign: true
+        env:
+          BUILD_TOOLS_VERSION: "31.0.0"
+
+      - name: Delete unsigned APKs
+        shell: bash
+        run: |
+          rm app/build/outputs/apk/release/*unsigned.apk
+          pushd app/build/outputs/apk/release
+          for file in *unsigned-*; do
+            new_name="${file/unsigned-/}"
+            mv -- "$file" "$new_name"
+          done
+          popd
+
+      - name: Upload app with plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.os }}-${{ matrix.abi }}-with-plugins
+          path: app/build/outputs/apk/release/*.apk
+
+      # create nightly release
+      - name: Generate unique release tag
+        id: generate_tag
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # 如果是 tag 触发，使用 tag 名称 + 时间戳确保唯一性
+            RELEASE_TAG="${{ github.ref_name }}-$(date +'%Y%m%d-%H%M%S')"
+            RELEASE_TITLE="Release ${{ github.ref_name }} ($(date +'%Y-%m-%d %H:%M:%S'))"
+            IS_PRERELEASE="false"
+          else
+            # 如果是分支触发，创建 nightly 构建
+            RELEASE_TAG="nightly-${{ github.ref_name }}-$(date +'%Y%m%d-%H%M%S')"
+            RELEASE_TITLE="Nightly Build - ${{ github.ref_name }} ($(date +'%Y-%m-%d %H:%M:%S'))"
+            IS_PRERELEASE="true"
+          fi
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "release_title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: generate_notes
+        run: |
+          # 获取最近的 commits 作为 release notes
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # 对于 tag，获取从上一个 tag 到当前 tag 的变更
+            PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            if [[ -n "$PREVIOUS_TAG" ]]; then
+              RELEASE_NOTES=$(git log --pretty=format:"- %s (%h)" $PREVIOUS_TAG..HEAD)
+            else
+              RELEASE_NOTES=$(git log --pretty=format:"- %s (%h)" --max-count=10)
+            fi
+          else
+            # 对于分支，获取最近 10 个 commits
+            RELEASE_NOTES=$(git log --pretty=format:"- %s (%h)" --max-count=10)
+          fi
+          
+          # 添加构建信息
+          BUILD_INFO="
+          
+          ## 构建信息
+          - 构建时间: $(date +'%Y-%m-%d %H:%M:%S UTC')
+          - 分支/标签: ${{ github.ref_name }}
+          - 提交: ${{ github.sha }}
+          - 构建系统: ${{ matrix.os }}
+          - 架构: ${{ matrix.abi }}
+          "
+          
+          FULL_NOTES="## 更改日志
+          $RELEASE_NOTES
+          $BUILD_INFO"
+          
+          # 保存到文件，处理多行内容
+          echo "$FULL_NOTES" > release_notes.md
+          echo "Generated release notes:"
+          cat release_notes.md
+
+      - name: Create Release
+        uses: 'marvinpinto/action-automatic-releases@latest'
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          automatic_release_tag: ${{ steps.generate_tag.outputs.release_tag }}
+          prerelease: ${{ steps.generate_tag.outputs.is_prerelease }}
+          title: ${{ steps.generate_tag.outputs.release_title }}
+          body_path: release_notes.md
+          files: |
+            app/build/outputs/apk/release/*.apk
+
